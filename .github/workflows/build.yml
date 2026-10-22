@@ -40,7 +40,7 @@ jobs:
           set -euo pipefail
           # shellcheck source=/dev/null
           source UPSTREAM.env
-          for name in UPSTREAM_REPOSITORY UPSTREAM_COMMIT RUST_VERSION CARGO_NDK_VERSION NDK_VERSION TARGETS; do
+          for name in UPSTREAM_REPOSITORY UPSTREAM_COMMIT RUST_VERSION RUST_MANIFEST_SHA256 CARGO_NDK_VERSION NDK_VERSION TARGETS; do
             echo "$name=${!name}" >>"$GITHUB_ENV"
           done
 
@@ -67,9 +67,18 @@ jobs:
       - name: Rust toolchain (pinned, no third-party action)
         run: |
           set -euo pipefail
-          rustup toolchain install "$RUST_VERSION" --profile minimal --no-self-update
+          # Pinned manifest first: rustup checks each component against the manifest it fetches,
+          # and check-toolchain.py checks that this manifest is the pinned one (fails early
+          # instead of building with a different compiler or standard library).
+          manifest="$RUNNER_TEMP/channel-rust-$RUST_VERSION.toml"
+          curl --proto '=https' --tlsv1.2 -sSfL -o "$manifest" \
+            "https://static.rust-lang.org/dist/channel-rust-$RUST_VERSION.toml"
+          echo "$RUST_MANIFEST_SHA256  $manifest" | sha256sum -c -
+          rustup toolchain install "$RUST_VERSION" --profile minimal --no-self-update \
+            $(for target in $TARGETS; do printf -- '--target %s ' "$target"; done)
           rustup default "$RUST_VERSION"
-          for target in $TARGETS; do rustup target add --toolchain "$RUST_VERSION" "$target"; done
+          python3 -I scripts/check-toolchain.py "$manifest" \
+            "${RUSTUP_HOME:-$HOME/.rustup}/toolchains/$RUST_VERSION-x86_64-unknown-linux-gnu" $TARGETS
           cargo install cargo-ndk --version "$CARGO_NDK_VERSION" --locked
           rustc --version && cargo ndk --version
 
@@ -102,9 +111,14 @@ jobs:
       - name: Both builds are identical
         run: |
           set -euo pipefail
-          # Diagnostics first (never decides the result): what each build saw, then, only when the
-          # bytes differ, which ELF sections differ. The verdict is the full-file comparison below.
-          diff -u a/diag/TOOLCHAIN.txt b/diag/TOOLCHAIN.txt || echo "::warning::toolchains differ between the two builds"
+          # What each build saw must match; then, only when the bytes differ, which ELF sections
+          # and crate objects differ. The verdict is the full-file comparison below.
+          # Same tools on both runners, or no verdict on the outputs (each build job already
+          # checked the Rust manifest; this also covers the NDK and cargo-ndk).
+          if ! diff -u a/diag/TOOLCHAIN.txt b/diag/TOOLCHAIN.txt; then
+            echo "::error::toolchains differ between the two builds"
+            exit 1
+          fi
           if ! diff -q a/SHA256SUMS.build b/SHA256SUMS.build >/dev/null; then
             for f in a/diag/sections-*.txt; do
               echo "== $(basename "$f")"

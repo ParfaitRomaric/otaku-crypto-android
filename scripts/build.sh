@@ -130,7 +130,13 @@ mkdir -p "$here/diag"
   run cargo ndk --version
   echo "## toolchain files"
   ( cd "$ndk_home/toolchains/llvm/prebuilt/linux-x86_64/bin" && sha256sum clang-[0-9]* ld.lld lld llvm-ar llvm-strip 2>/dev/null || true )
-  ( cd "$rustup_home/toolchains" && find . -path "*/lib/rustlib/*/lib/*.rlib" -type f | LC_ALL=C sort | xargs sha256sum | sha256sum | sed 's/-$/std rlibs/' )
+  # Pinned toolchain only (the runner image preinstalls other toolchains, which made the first
+  # version of this digest differ between runners), one line per target, contents only.
+  toolchain_dir="$rustup_home/toolchains/$RUST_VERSION-x86_64-unknown-linux-gnu"
+  for t in x86_64-unknown-linux-gnu $TARGETS; do
+    ( cd "$toolchain_dir/lib/rustlib/$t/lib" && find . -name '*.rlib' -type f -print0 | LC_ALL=C sort -z \
+      | xargs -0 sha256sum | sha256sum | sed "s/-\$/std rlibs $t/" )
+  done
 } >"$here/diag/TOOLCHAIN.txt"
 
 cd "$src"
@@ -145,6 +151,14 @@ for target in $TARGETS; do
   # unstripped file to out/jniLibs) + UniFFI Kotlin generation from target/<triple>/release.
   run cargo xtask kotlin build-android-library --package crypto-sdk --release \
     --only-target "$target" --src-dir "$out"
+done
+
+# uniffi_bindgen must not be compiled for the phone any more (patch 0002).
+for target in $TARGETS; do
+  if ls "$src/target/$target/release/deps/" | grep -q '^libuniffi_bindgen-'; then
+    echo "uniffi_bindgen was compiled for $target: check patches/0002" >&2
+    exit 1
+  fi
 done
 
 # Diagnostic: digests of every object and archive member the link consumed (one line per crate

@@ -28,6 +28,9 @@ Aucun secret : seul le jeton automatique `GITHUB_TOKEN`, en lecture seule partou
 | `scripts/build.sh` | Vérifie le commit, applique les correctifs, compile, liste les licences, empreintes |
 | `scripts/elf-sections.py` | Diagnostic : empreinte de chaque section ELF, comparée seulement si les deux compilations diffèrent |
 | `scripts/object-digests.py` | Diagnostic : empreinte de chaque objet de crate (`.rlib`, `.a`, membre par membre) et des fichiers générés par les scripts de compilation |
+| `patches/0002-ffi-no-uniffi-cli-in-library.patch` | Retire la fonctionnalité `cli` d'UniFFI et le `[[bin]]` de la bibliothèque : `uniffi_bindgen` n'est plus compilé pour le téléphone (`Cargo.lock` inchangé, le paquet `uniffi-bindgen` de l'espace de travail garde l'outil) |
+| `scripts/check-toolchain.py` | Vérifie que rustc, cargo et les `rust-std` installés viennent du manifeste Rust épinglé (`RUST_MANIFEST_SHA256`) |
+| `fallback/build-arm64-attested-only.yml` | Repli **inactif** (décision du fondateur) : arm64 en avertissement, tout le reste bloquant |
 | `scripts/package.sh` | Archive `tar.gz` déterministe (noms triés, dates et propriétaires fixes, gzip sans horodatage) |
 | `LICENSE` | **À ajouter** : texte de la licence Apache 2.0 (celle du code amont) |
 
@@ -59,6 +62,8 @@ Première exécution : fichiers Kotlin et `THIRD_PARTY_CRATES.txt` identiques, m
 - **Diagnostic** joint à chaque artefact (`diag/`, hors archive publiée) : variables vues par la compilation, versions et empreintes des outils (clang, lld, bibliothèques standard Rust), empreinte de chaque section ELF. Si l'écart persiste, la tâche de comparaison affiche les sections différentes (`.text` ou `.rodata` : ordre de code produit par une macro ; `.comment` ou empreintes d'outils : image de machine différente) avant d'échouer.
 
 3e exécution : armeabi-v7a identique, arm64-v8a encore différent (`.text` +32 octets, `.gcc_except_table`, `.eh_frame`, relocations ; `.rodata` et `.data` identiques), donc du code généré différemment pour au moins une fonction. Les options arm64 amont (`+neon,+aes,+sha2,+pmuv3`) ne sont pas en cause en elles-mêmes. Ajouts : lld sur un seul fil (`--threads=1`) ; carte de liaison par cible et empreinte de chaque objet de crate avant la liaison (`diag/objects-<cible>.txt`), affichées par la comparaison pour nommer le crate fautif. Le correctif de l'erratum Cortex-A53 843419 (activé par le NDK sur arm64) est conservé : il amplifie un écart de disposition mais ne le crée pas.
+
+4e exécution : (1) l'empreinte « std rlibs » couvrait toutes les chaînes Rust de la machine, y compris celle préinstallée par l'image, d'où un faux écart ; elle porte désormais sur la seule chaîne épinglée, cible par cible, le manifeste Rust est épinglé par SHA-256 et vérifié avant la compilation, et toute différence d'outils fait échouer la comparaison. (2) Seul objet de code différent : `uniffi_bindgen` (générateur de code embarqué dans la bibliothèque par la fonctionnalité `cli`), retiré par `patches/0002` ; la compilation échoue s'il est encore compilé pour une cible Android.
 
 Cause restante possible, non corrigeable par réglage : une macro procédurale d'une dépendance qui produit du code dans un ordre aléatoire (table de hachage). Le diagnostic par section la désignera ; il faudrait alors un correctif ciblé dans `patches/`.
 
