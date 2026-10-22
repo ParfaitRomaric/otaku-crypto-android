@@ -82,6 +82,7 @@ jobs:
           path: |
             out/
             SHA256SUMS.build
+            diag/
           if-no-files-found: error
           retention-days: 7
 
@@ -101,6 +102,15 @@ jobs:
       - name: Both builds are identical
         run: |
           set -euo pipefail
+          # Diagnostics first (never decides the result): what each build saw, then, only when the
+          # bytes differ, which ELF sections differ. The verdict is the full-file comparison below.
+          diff -u a/diag/TOOLCHAIN.txt b/diag/TOOLCHAIN.txt || echo "::warning::toolchains differ between the two builds"
+          if ! diff -q a/SHA256SUMS.build b/SHA256SUMS.build >/dev/null; then
+            for f in a/diag/sections-*.txt; do
+              echo "== $(basename "$f")"
+              diff -u "$f" "b/diag/$(basename "$f")" || true
+            done
+          fi
           diff -u a/SHA256SUMS.build b/SHA256SUMS.build
           ( cd a/out && sha256sum -c ../SHA256SUMS.build )
           ( cd b/out && sha256sum -c ../SHA256SUMS.build )

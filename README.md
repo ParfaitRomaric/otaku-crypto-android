@@ -26,6 +26,7 @@ Aucun secret : seul le jeton automatique `GITHUB_TOKEN`, en lecture seule partou
 | `UPSTREAM.env` | Épingles : dépôt et commit amont, Rust 1.99.0, cargo-ndk 4.1.2, NDK 28.2.13676358, cibles |
 | `patches/0001-ffi-identity-based-strategy.patch` | Correctif (vérifié : s'applique au commit épinglé par `git apply --check`) |
 | `scripts/build.sh` | Vérifie le commit, applique les correctifs, compile, liste les licences, empreintes |
+| `scripts/elf-sections.py` | Diagnostic : empreinte de chaque section ELF, comparée seulement si les deux compilations diffèrent |
 | `scripts/package.sh` | Archive `tar.gz` déterministe (noms triés, dates et propriétaires fixes, gzip sans horodatage) |
 | `LICENSE` | **À ajouter** : texte de la licence Apache 2.0 (celle du code amont) |
 
@@ -45,6 +46,18 @@ Aucun secret : seul le jeton automatique `GITHUB_TOKEN`, en lecture seule partou
 - À chaque changement d'épingle, dans la demande de fusion Otaku (tâche de CI dédiée, avant d'écrire la nouvelle empreinte) : `gh attestation verify <archive> --repo <propriétaire>/otaku-crypto-android --signer-workflow <propriétaire>/otaku-crypto-android/.github/workflows/build.yml --source-ref refs/tags/<tag> --deny-self-hosted-runners`, puis comparaison de l'empreinte avec le fichier `.sha256` de la release.
 - Règles R8/ProGuard pour JNA et les classes UniFFI (G1 §4.2).
 - Mise à jour de sécurité : veille des avis matrix-org ; nouvelle épingle = PR relue + nouveau tag (0,5 à 1 jour, G1 §6.1).
+
+## Reproductibilité (après l'échec du 2026-10-22)
+
+Première exécution : fichiers Kotlin et `THIRD_PARTY_CRATES.txt` identiques, mais les deux `libmatrix_sdk_crypto_ffi.so` différents. Les chemins étaient déjà les mêmes sur les deux machines ; aucune reproduction locale (pas de NDK sur le poste, ADR-0009). `scripts/build.sh` fige désormais toutes les sources d'écart connues, sans rien retirer de la comparaison (octets de chaque fichier) :
+
+- **Environnement vide** (`env -i` + liste explicite) : aucune variable propre à la machine (`GITHUB_*`, `RUNNER_*`, `ImageVersion`, `CI`) ne peut atteindre un `env!`/`option_env!` ou un script de compilation.
+- **Chemins réécrits** : `--remap-path-prefix` (Rust) et `-ffile-prefix-map` (C de SQLite) pour le dossier de travail, `$CARGO_HOME`, `$RUSTUP_HOME` et le NDK, par variables `CARGO_TARGET_<cible>_RUSTFLAGS` et `CFLAGS_<cible>` (et non `RUSTFLAGS`, qui écraserait les options arm64 amont, recopiées et contrôlées inchangées).
+- **Profil release figé** par `CARGO_PROFILE_RELEASE_*` : `codegen-units=1` (au lieu de 16), `strip=symbols` (cargo-ndk 4.1.2 ne dépouille pas, contrairement à ce qu'indiquait ce README), `lto=false`, `debug=0`, `panic=unwind`, `incremental=false`, `CARGO_INCREMENTAL=0`.
+- **Pas de note build-id** (`-Wl,--build-id=none`), `SOURCE_DATE_EPOCH` du commit amont, `TZ=UTC`, `LC_ALL=C.UTF-8`, `umask 0022`, droits des fichiers fixés, tris en collation C.
+- **Diagnostic** joint à chaque artefact (`diag/`, hors archive publiée) : variables vues par la compilation, versions et empreintes des outils (clang, lld, bibliothèques standard Rust), empreinte de chaque section ELF. Si l'écart persiste, la tâche de comparaison affiche les sections différentes (`.text` ou `.rodata` : ordre de code produit par une macro ; `.comment` ou empreintes d'outils : image de machine différente) avant d'échouer.
+
+Cause restante possible, non corrigeable par réglage : une macro procédurale d'une dépendance qui produit du code dans un ordre aléatoire (table de hachage). Le diagnostic par section la désignera ; il faudrait alors un correctif ciblé dans `patches/`.
 
 ## Points à vérifier à la première exécution
 
