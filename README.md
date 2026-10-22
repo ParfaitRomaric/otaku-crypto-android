@@ -38,7 +38,7 @@ Aucun secret : seul le jeton automatique `GITHUB_TOKEN`, en lecture seule partou
    - *General → Releases* : activer « Enable release immutability » (une release publiée ne peut plus être modifiée ni recevoir d'autre fichier).
    - *Rules → Rulesets* : branche `main` (demande de fusion obligatoire, pas de poussée forcée ni de suppression) ; tags `v*` (création, mise à jour et suppression réservées au fondateur, en contournement nommé).
    - Aucun secret, aucune variable, aucun environnement à créer.
-3. Pousser sur `main` (déclenche une compilation sans publication), vérifier que les deux compilations sont identiques, puis créer et pousser le tag `v0.19.1-otaku.1` ; relever l'URL et le SHA-256 de l'archive publiés pour les transmettre au coordinateur (empreinte figée côté Otaku).
+3. Pousser sur `main` (déclenche une compilation sans publication), vérifier que les deux compilations sont identiques, puis créer et pousser le tag `v0.19.1-otaku.2` (`v0.19.1-otaku.1` a été poussé sur un commit qui ne compilait pas, sans release, et ne se déplace pas) ; relever l'URL et le SHA-256 de l'archive publiés pour les transmettre au coordinateur (empreinte figée côté Otaku).
 
 ## Côté Otaku (plus tard, `packages/crypto/android`, avec Bulma)
 
@@ -53,7 +53,7 @@ Première exécution : fichiers Kotlin et `THIRD_PARTY_CRATES.txt` identiques, m
 
 - **Environnement vide** (`env -i` + liste explicite) : aucune variable propre à la machine (`GITHUB_*`, `RUNNER_*`, `ImageVersion`, `CI`) ne peut atteindre un `env!`/`option_env!` ou un script de compilation.
 - **Chemins réécrits** : `--remap-path-prefix` (Rust) et `-ffile-prefix-map` (C de SQLite) pour le dossier de travail, `$CARGO_HOME`, `$RUSTUP_HOME` et le NDK, par variables `CARGO_TARGET_<cible>_RUSTFLAGS` et `CFLAGS_<cible>` (et non `RUSTFLAGS`, qui écraserait les options arm64 amont, recopiées et contrôlées inchangées).
-- **Profil release figé** par `CARGO_PROFILE_RELEASE_*` : `codegen-units=1` (au lieu de 16), `strip=symbols` (cargo-ndk 4.1.2 ne dépouille pas, contrairement à ce qu'indiquait ce README), `lto=false`, `debug=0`, `panic=unwind`, `incremental=false`, `CARGO_INCREMENTAL=0`.
+- **Profil release figé** par `CARGO_PROFILE_RELEASE_*` : `codegen-units=1` (au lieu de 16), `strip=debuginfo` (UniFFI lit ses métadonnées dans la table des symboles pour générer le Kotlin : `strip=symbols` a fait échouer la 2e exécution), puis dépouillement des seules copies livrées (`out/jniLibs`) par le `llvm-strip --strip-all` du NDK épinglé, après la génération Kotlin (cargo-ndk 4.1.2 ne dépouille pas, contrairement à ce qu'indiquait ce README), `lto=false`, `debug=0`, `panic=unwind`, `incremental=false`, `CARGO_INCREMENTAL=0`.
 - **Pas de note build-id** (`-Wl,--build-id=none`), `SOURCE_DATE_EPOCH` du commit amont, `TZ=UTC`, `LC_ALL=C.UTF-8`, `umask 0022`, droits des fichiers fixés, tris en collation C.
 - **Diagnostic** joint à chaque artefact (`diag/`, hors archive publiée) : variables vues par la compilation, versions et empreintes des outils (clang, lld, bibliothèques standard Rust), empreinte de chaque section ELF. Si l'écart persiste, la tâche de comparaison affiche les sections différentes (`.text` ou `.rodata` : ordre de code produit par une macro ; `.comment` ou empreintes d'outils : image de machine différente) avant d'échouer.
 
