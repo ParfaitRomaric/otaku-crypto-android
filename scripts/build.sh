@@ -64,7 +64,9 @@ for remap in "${remaps[@]}"; do
   rustflags+=("--remap-path-prefix=$remap")
   cflags+=("-ffile-prefix-map=$remap")
 done
-rustflags+=(-C link-arg=-Wl,--build-id=none)
+# lld on one thread (its output does not depend on threads, but it removes one variable); the
+# Cortex-A53 erratum 843419 fix that NDK clang enables on arm64 is kept (old phones need it).
+rustflags+=(-C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--threads=1)
 # NDK clang (>= 18) also takes __DATE__/__TIME__ from SOURCE_DATE_EPOCH.
 
 SOURCE_DATE_EPOCH="$(git -C "$src" log -1 --format=%ct)"
@@ -101,7 +103,9 @@ build_env=(
 for target in $TARGETS; do
   upper="$(echo "$target" | tr 'a-z-' 'A-Z_')"
   lower="$(echo "$target" | tr '-' '_')"
-  flags=("${rustflags[@]}")
+  # Link map (diagnostic only: placement and size of every input section, to name the function
+  # whose code differs). It is written beside the build, never into out/.
+  flags=("${rustflags[@]}" -C "link-arg=-Wl,-Map=$here/diag/link-$target.map")
   if [ "$target" = aarch64-linux-android ]; then
     flags=(-C target-feature=+neon,+aes,+sha2,+pmuv3 "${flags[@]}")
   fi
@@ -141,6 +145,13 @@ for target in $TARGETS; do
   # unstripped file to out/jniLibs) + UniFFI Kotlin generation from target/<triple>/release.
   run cargo xtask kotlin build-android-library --package crypto-sdk --release \
     --only-target "$target" --src-dir "$out"
+done
+
+# Diagnostic: digests of every object and archive member the link consumed (one line per crate
+# object), and the compressed link maps. Compared only when the libraries differ.
+for target in $TARGETS; do
+  python3 -I "$here/scripts/object-digests.py" "$src/target/$target/release" >"$here/diag/objects-$target.txt"
+  if [ -f "$here/diag/link-$target.map" ]; then gzip -n -9 -f "$here/diag/link-$target.map"; fi
 done
 
 # Kotlin is generated: nothing reads the symbol table any more. Strip the shipped copies only, with

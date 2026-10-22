@@ -110,6 +110,12 @@ jobs:
               echo "== $(basename "$f")"
               diff -u "$f" "b/diag/$(basename "$f")" || true
             done
+            # Crate objects and build script outputs that differ (the first culprit is the
+            # earliest one in the dependency order; link maps are in the artifacts, diag/).
+            for f in a/diag/objects-*.txt; do
+              echo "== $(basename "$f"): differing objects"
+              diff "$f" "b/diag/$(basename "$f")" | grep '^[<>]' | head -200 || true
+            done
           fi
           diff -u a/SHA256SUMS.build b/SHA256SUMS.build
           ( cd a/out && sha256sum -c ../SHA256SUMS.build )

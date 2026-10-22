@@ -27,6 +27,7 @@ Aucun secret : seul le jeton automatique `GITHUB_TOKEN`, en lecture seule partou
 | `patches/0001-ffi-identity-based-strategy.patch` | Correctif (vérifié : s'applique au commit épinglé par `git apply --check`) |
 | `scripts/build.sh` | Vérifie le commit, applique les correctifs, compile, liste les licences, empreintes |
 | `scripts/elf-sections.py` | Diagnostic : empreinte de chaque section ELF, comparée seulement si les deux compilations diffèrent |
+| `scripts/object-digests.py` | Diagnostic : empreinte de chaque objet de crate (`.rlib`, `.a`, membre par membre) et des fichiers générés par les scripts de compilation |
 | `scripts/package.sh` | Archive `tar.gz` déterministe (noms triés, dates et propriétaires fixes, gzip sans horodatage) |
 | `LICENSE` | **À ajouter** : texte de la licence Apache 2.0 (celle du code amont) |
 
@@ -56,6 +57,8 @@ Première exécution : fichiers Kotlin et `THIRD_PARTY_CRATES.txt` identiques, m
 - **Profil release figé** par `CARGO_PROFILE_RELEASE_*` : `codegen-units=1` (au lieu de 16), `strip=debuginfo` (UniFFI lit ses métadonnées dans la table des symboles pour générer le Kotlin : `strip=symbols` a fait échouer la 2e exécution), puis dépouillement des seules copies livrées (`out/jniLibs`) par le `llvm-strip --strip-all` du NDK épinglé, après la génération Kotlin (cargo-ndk 4.1.2 ne dépouille pas, contrairement à ce qu'indiquait ce README), `lto=false`, `debug=0`, `panic=unwind`, `incremental=false`, `CARGO_INCREMENTAL=0`.
 - **Pas de note build-id** (`-Wl,--build-id=none`), `SOURCE_DATE_EPOCH` du commit amont, `TZ=UTC`, `LC_ALL=C.UTF-8`, `umask 0022`, droits des fichiers fixés, tris en collation C.
 - **Diagnostic** joint à chaque artefact (`diag/`, hors archive publiée) : variables vues par la compilation, versions et empreintes des outils (clang, lld, bibliothèques standard Rust), empreinte de chaque section ELF. Si l'écart persiste, la tâche de comparaison affiche les sections différentes (`.text` ou `.rodata` : ordre de code produit par une macro ; `.comment` ou empreintes d'outils : image de machine différente) avant d'échouer.
+
+3e exécution : armeabi-v7a identique, arm64-v8a encore différent (`.text` +32 octets, `.gcc_except_table`, `.eh_frame`, relocations ; `.rodata` et `.data` identiques), donc du code généré différemment pour au moins une fonction. Les options arm64 amont (`+neon,+aes,+sha2,+pmuv3`) ne sont pas en cause en elles-mêmes. Ajouts : lld sur un seul fil (`--threads=1`) ; carte de liaison par cible et empreinte de chaque objet de crate avant la liaison (`diag/objects-<cible>.txt`), affichées par la comparaison pour nommer le crate fautif. Le correctif de l'erratum Cortex-A53 843419 (activé par le NDK sur arm64) est conservé : il amplifie un écart de disposition mais ne le crée pas.
 
 Cause restante possible, non corrigeable par réglage : une macro procédurale d'une dépendance qui produit du code dans un ordre aléatoire (table de hachage). Le diagnostic par section la désignera ; il faudrait alors un correctif ciblé dans `patches/`.
 
