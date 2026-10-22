@@ -1,0 +1,62 @@
+crypto-ffi: expose the identity-based sharing strategy and is_cross_signed_by_owner
+
+Kotlin callers of matrix-sdk-crypto-ffi can only pick AllDevices,
+OnlyTrustedDevices or ErrorOnVerifiedUserProblem today. The identity-based
+strategy (share only with devices signed by their owner's cross-signing
+identity) is what keeps a device injected by a compromised server from
+receiving room keys without asking users to verify each contact; the WASM
+bindings already expose it as CollectStrategy.identityBasedStrategy().
+
+- EncryptionSettings.identity_based_strategy (default false, so existing
+  Kotlin callers are unchanged).
+- Device.is_cross_signed_by_owner.
+
+Against tag matrix-sdk-crypto-0.19.1 (commit b18166c68bb958a21f0bca8b2d8320cb53583362).
+Not compiled locally (no Rust toolchain on the workstation): the build workflow
+is the first compilation. To be proposed upstream as is (D-238).
+
+--- a/bindings/matrix-sdk-crypto-ffi/src/device.rs
++++ b/bindings/matrix-sdk-crypto-ffi/src/device.rs
+@@ -30,6 +30,10 @@
+     pub first_time_seen_ts: u64,
+     /// Whether or not the device is a dehydrated device.
+     pub dehydrated: bool,
++    /// Is the device signed by its owner's self-signing key, whether or not
++    /// we trust that identity (what the identity-based sharing strategy
++    /// checks).
++    pub is_cross_signed_by_owner: bool,
+ }
+ 
+ impl From<InnerDevice> for Device {
+@@ -45,6 +49,7 @@
+             cross_signing_trusted: d.is_cross_signing_trusted(),
+             first_time_seen_ts: d.first_time_seen_ts().0.into(),
+             dehydrated: d.is_dehydrated(),
++            is_cross_signed_by_owner: d.is_cross_signed_by_owner(),
+         }
+     }
+ }
+--- a/bindings/matrix-sdk-crypto-ffi/src/lib.rs
++++ b/bindings/matrix-sdk-crypto-ffi/src/lib.rs
+@@ -684,12 +684,21 @@
+     /// Should fail to send when a verified user has unverified devices, or when
+     /// a previously verified user replaces their identity.
+     pub error_on_verified_user_problem: bool,
++    /// Share the room key only with devices that are signed by their owner's
++    /// cross-signing identity (`CollectStrategy::IdentityBasedStrategy`), so
++    /// that a device added without the account's signature never receives
++    /// it. `only_allow_trusted_devices` takes precedence over this flag, which
++    /// takes precedence over `error_on_verified_user_problem`.
++    #[uniffi(default = false)]
++    pub identity_based_strategy: bool,
+ }
+ 
+ impl From<EncryptionSettings> for RustEncryptionSettings {
+     fn from(v: EncryptionSettings) -> Self {
+         let sharing_strategy = if v.only_allow_trusted_devices {
+             CollectStrategy::OnlyTrustedDevices
++        } else if v.identity_based_strategy {
++            CollectStrategy::IdentityBasedStrategy
+         } else if v.error_on_verified_user_problem {
+             CollectStrategy::ErrorOnVerifiedUserProblem
+         } else {
