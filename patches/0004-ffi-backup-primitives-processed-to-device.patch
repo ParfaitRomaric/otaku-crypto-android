@@ -19,8 +19,9 @@ of an existing call changes. Otaku ADR-0034 (D-379) and ADR-0033 §3.
    Fixed error codes (BackupPrimitiveError): argon2_params, aead_input,
    aead_open_failed, input_too_large, insufficient_memory, internal. Inputs,
    keys and plaintexts are erased on return (Zeroizing), failure included.
-   New dependencies, pinned, no default features: argon2 =0.6.0 (alloc,
-   zeroize), blake2 =0.11.0 (zeroize), chacha20poly1305 =0.11.0 (alloc,
+   New dependencies, pinned, no default features: argon2 =0.6.0 (zeroize
+   only: `alloc` would add password-hash and phc to the lock through its
+   weak feature), blake2 =0.11.0 (zeroize), chacha20poly1305 =0.11.0 (alloc,
    zeroize; already in the tree through matrix-sdk-store-encryption, which
    now also gets its zeroize feature). Cargo.lock gains argon2 and blake2
    only (base64ct, cpufeatures 0.3.0, digest 0.11.2 and zeroize are already
@@ -113,12 +114,15 @@ diff --git a/Cargo.lock b/Cargo.lock
 diff --git a/bindings/matrix-sdk-crypto-ffi/Cargo.toml b/bindings/matrix-sdk-crypto-ffi/Cargo.toml
 --- a/bindings/matrix-sdk-crypto-ffi/Cargo.toml
 +++ b/bindings/matrix-sdk-crypto-ffi/Cargo.toml
-@@ -27,6 +27,10 @@
+@@ -27,6 +27,13 @@
  
  [dependencies]
  anyhow.workspace = true
 +# Backup primitives of Otaku (src/backup_primitives.rs, ADR-0034): pinned, no default features.
-+argon2 = { version = "=0.6.0", default-features = false, features = ["alloc", "zeroize"] }
++# argon2 without `alloc`: it only gates `hash_password_into` and its own work memory (unused, the
++# work area is ours), and its weak `password-hash?/alloc` would put password-hash and phc in the
++# lock file.
++argon2 = { version = "=0.6.0", default-features = false, features = ["zeroize"] }
 +blake2 = { version = "=0.11.0", default-features = false, features = ["zeroize"] }
 +chacha20poly1305 = { version = "=0.11.0", default-features = false, features = ["alloc", "zeroize"] }
  futures-util.workspace = true
