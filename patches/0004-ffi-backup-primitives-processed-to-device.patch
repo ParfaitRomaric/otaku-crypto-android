@@ -132,7 +132,7 @@ diff --git a/bindings/matrix-sdk-crypto-ffi/src/backup_primitives.rs b/bindings/
 new file mode 100644
 --- /dev/null
 +++ b/bindings/matrix-sdk-crypto-ffi/src/backup_primitives.rs
-@@ -0,0 +1,759 @@
+@@ -0,0 +1,773 @@
 +//! Primitives of the Otaku backup envelopes, for Android (Otaku ADR-0034, D-379).
 +//!
 +//! The web composes its backup envelopes (passphrase, recovery key, PIN escrow) from libsodium:
@@ -589,30 +589,44 @@ new file mode 100644
 +            assert_eq!(opened, Err(BackupPrimitiveError::AeadOpenFailed), "{}", text(case, "name"));
 +        }
 +
-+        // The invalid envelopes that reach a primitive: a salt or a nonce of the wrong size.
++        // The invalid envelopes that reach a primitive: a salt or a nonce of the wrong size. Only
++        // those are parsed: the other invalid texts are not JSON at all (NaN, BOM, truncated...).
 +        let password = hex(text(&cases(&fixture, "valid")[0], "normalisedPassphraseUtf8Hex"));
++        let mut reached = 0;
 +        for case in cases(&fixture, "invalid") {
 +            let name = text(case, "name");
-+            let parsed = envelope(case);
 +            match name {
-+                "salt-15-bytes" | "salt-17-bytes" => assert_eq!(
-+                    backup_argon2id(password.clone(), base64url(text(&parsed["kdf"], "salt")), 1),
-+                    Err(BackupPrimitiveError::Argon2Params),
-+                    "{name}"
-+                ),
-+                "nonce-12-bytes" | "nonce-25-bytes" => assert_eq!(
-+                    backup_open(
-+                        vec![0; 32],
-+                        base64url(text(&parsed, "nonce")),
-+                        base64url(text(&parsed, "ciphertext")),
-+                        Vec::new()
-+                    ),
-+                    Err(BackupPrimitiveError::AeadInput),
-+                    "{name}"
-+                ),
++                "salt-15-bytes" | "salt-17-bytes" => {
++                    let parsed = envelope(case);
++                    assert_eq!(
++                        backup_argon2id(
++                            password.clone(),
++                            base64url(text(&parsed["kdf"], "salt")),
++                            1
++                        ),
++                        Err(BackupPrimitiveError::Argon2Params),
++                        "{name}"
++                    );
++                    reached += 1;
++                }
++                "nonce-12-bytes" | "nonce-25-bytes" => {
++                    let parsed = envelope(case);
++                    assert_eq!(
++                        backup_open(
++                            vec![0; 32],
++                            base64url(text(&parsed, "nonce")),
++                            base64url(text(&parsed, "ciphertext")),
++                            Vec::new()
++                        ),
++                        Err(BackupPrimitiveError::AeadInput),
++                        "{name}"
++                    );
++                    reached += 1;
++                }
 +                _ => {}
 +            }
 +        }
++        assert_eq!(reached, 4, "the four invalid cases that reach a primitive");
 +    }
 +
 +    #[test]
