@@ -1,0 +1,5 @@
+# Exceptions to the verdict of cargo audit (scripts/audit-verdict.py, Otaku ADR-0034 §3): an
+# `unsound` or `yanked` warning on a crate linked into the Android library fails the release unless
+# it is listed here, one per line: "<advisory id or yanked> <crate> v<version>", with the reason and
+# the reviewers (Kurapika, Killua) in a comment. A pull request reviewed by the founder adds a line.
+# Empty on purpose.

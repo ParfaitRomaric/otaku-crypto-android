@@ -22,8 +22,63 @@ concurrency:
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
+  # Before any Android build and before a tag can be released (Otaku ADR-0034 §4): vectors of the
+  # backup primitives, lock file, dependency tree without a new duplicate, advisories. Read-only
+  # (top-level permissions), host toolchain only.
+  checks:
+    name: vectors, dependencies, advisories
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read the pins
+        run: |
+          set -euo pipefail
+          # shellcheck source=/dev/null
+          source UPSTREAM.env
+          for name in UPSTREAM_REPOSITORY UPSTREAM_COMMIT RUST_VERSION RUST_MANIFEST_SHA256 CARGO_AUDIT_VERSION; do
+            echo "$name=${!name}" >>"$GITHUB_ENV"
+          done
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.UPSTREAM_REPOSITORY }}
+          ref: ${{ env.UPSTREAM_COMMIT }}
+          path: upstream
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Rust toolchain (pinned, host only)
+        run: |
+          set -euo pipefail
+          manifest="$RUNNER_TEMP/channel-rust-$RUST_VERSION.toml"
+          curl --proto '=https' --tlsv1.2 -sSfL -o "$manifest" \
+            "https://static.rust-lang.org/dist/channel-rust-$RUST_VERSION.toml"
+          echo "$RUST_MANIFEST_SHA256  $manifest" | sha256sum -c -
+          rustup toolchain install "$RUST_VERSION" --profile minimal --no-self-update
+          rustup default "$RUST_VERSION"
+          python3 -I scripts/check-toolchain.py "$manifest" \
+            "${RUSTUP_HOME:-$HOME/.rustup}/toolchains/$RUST_VERSION-x86_64-unknown-linux-gnu"
+          cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked
+          rustc --version && cargo audit --version
+
+      - name: Checks
+        run: bash scripts/check.sh
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: checks
+          path: checks/
+          if-no-files-found: warn
+          retention-days: 7
+
   build:
     name: build ${{ matrix.attempt }}
+    needs: checks
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     strategy:
@@ -167,6 +222,10 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           ./scripts/package.sh "$version"
           echo "file=dist/otaku-crypto-android-$version.tar.gz" >>"$GITHUB_OUTPUT"
+          # The dependency trees of the archive, also as files of the release (ADR-0034 §3).
+          for f in out/dependency-tree/*.txt; do
+            cp "$f" "dist/dependency-tree-$(basename "$f")"
+          done
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: ${{ steps.archive.outputs.file }}
@@ -178,5 +237,6 @@ jobs:
           set -euo pipefail
           # --verify-tag: never let gh create a tag; the release only exists for a pushed tag.
           gh release create "$GITHUB_REF_NAME" "$ARCHIVE" "$ARCHIVE.sha256" SHA256SUMS.build \
+            dist/dependency-tree-*.txt \
             --verify-tag --title "$GITHUB_REF_NAME" \
             --notes "matrix-sdk-crypto-ffi (commit pinned in UPSTREAM.env) with the patches of this tag. Verify: gh attestation verify <archive> --repo $GITHUB_REPOSITORY --signer-workflow $GITHUB_REPOSITORY/.github/workflows/build.yml --source-ref refs/tags/$GITHUB_REF_NAME --deny-self-hosted-runners"

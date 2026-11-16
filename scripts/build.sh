@@ -23,6 +23,8 @@ for patch in "$here"/patches/*.patch; do
   git -C "$src" apply --check "$patch"
   git -C "$src" apply "$patch"
 done
+# Patch 0004 adds locked dependencies: the lock file to keep is the patched one (checked below).
+locked_sum="$(sha256sum <"$src/Cargo.lock")"
 
 # Reproducibility (D-238): the first run on two runners gave different .so files with identical
 # Kotlin sources, so every known source of variation is pinned here, not only the timestamps.
@@ -176,14 +178,33 @@ for so in "$out"/jniLibs/*/*.so; do
   run "$llvm_strip" --strip-all "$so"
 done
 
-# Licences of the crates actually linked for Android (for the third-party licence list).
-run cargo tree --locked -p matrix-sdk-crypto-ffi --target aarch64-linux-android -e normal \
-  --prefix none --format '{p} {l}' | LC_ALL=C sort -u >"$out/THIRD_PARTY_CRATES.txt"
+# Licences of the crates actually linked for Android (union of the targets, for the third-party
+# licence list), and the dependency trees published with the release (ADR-0034 §3): what is
+# linked for each target, with which features, and who brings the crates of the backup primitives
+# (checked for duplicates by scripts/check.sh).
+mkdir -p "$out/dependency-tree"
+for target in $TARGETS; do
+  run cargo tree --locked -p matrix-sdk-crypto-ffi --target "$target" -e normal \
+    --prefix none --format '{p} {l}'
+done | LC_ALL=C sort -u >"$out/THIRD_PARTY_CRATES.txt"
+for target in $TARGETS; do
+  run cargo tree --locked -p matrix-sdk-crypto-ffi --target "$target" -e normal \
+    >"$out/dependency-tree/$target-normal.txt"
+  run cargo tree --locked -p matrix-sdk-crypto-ffi --target "$target" -e features \
+    >"$out/dependency-tree/$target-features.txt"
+  for crate in argon2 blake2 chacha20poly1305; do
+    run cargo tree --locked -p matrix-sdk-crypto-ffi --target "$target" -e normal \
+      -i "$crate" >"$out/dependency-tree/$target-inverted-$crate.txt"
+  done
+done
+# Paths of the runner would make the two builds differ: the workspace path is written as /build.
+sed -i "s#$src#/build/upstream#g" "$out"/dependency-tree/*.txt
 
-git -C "$src" diff --exit-code --stat -- Cargo.lock || {
+if [ "$(sha256sum <"$src/Cargo.lock")" != "$locked_sum" ]; then
   echo "Cargo.lock changed during the build" >&2
+  git -C "$src" diff --stat -- Cargo.lock >&2 || true
   exit 1
-}
+fi
 
 # Section by section digests of each library: only read when the two builds differ.
 for so in "$out"/jniLibs/*/*.so; do
