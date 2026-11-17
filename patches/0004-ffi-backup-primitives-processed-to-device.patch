@@ -33,6 +33,14 @@ of an existing call changes. Otaku ADR-0034 (D-379) and ADR-0033 §3.
    largest envelope), refusals and bounds, erasure of the work memory, and
    the exported surface (kdf_set is the only cost parameter).
 
+   Security updates in Cargo.lock, all semver-compatible with the
+   workspace requirements, checksums from the crates.io index: vodozemac
+   0.11.0 -> 0.11.2 (RUSTSEC-2026-0510, -0445, -0451; it enables the
+   `zeroize` feature of aes, cbc, cipher, hmac, sha2 and chacha20poly1305,
+   hence the new `zeroize` edges of aes, cipher and hybrid-array), ctutils
+   0.4.2 -> 0.4.4 (RUSTSEC-2026-0385), rustix 1.1.4 -> 1.1.6
+   (RUSTSEC-2026-0486), tokio 1.53.1 -> 1.53.3 (RUSTSEC-2026-0386).
+
 2. SyncChangesResult.processed_to_device_events (new field; the existing
    to_device_events is unchanged): for each to-device event, Decrypted
    { raw, sender, sender_device, sender_curve25519_key, verification_state }
@@ -49,7 +57,15 @@ workflow is the first compilation.
 diff --git a/Cargo.lock b/Cargo.lock
 --- a/Cargo.lock
 +++ b/Cargo.lock
-@@ -123,6 +123,18 @@
+@@ -48,6 +48,7 @@
+  "cipher",
+  "cpubits",
+  "cpufeatures 0.3.0",
++ "zeroize",
+ ]
+ 
+ [[package]]
+@@ -123,6 +124,18 @@
  checksum = "70e0a5f99dfebb87bb342d0f53bb92c81842e100bbb915223e38349580e5441d"
  
  [[package]]
@@ -68,7 +84,7 @@ diff --git a/Cargo.lock b/Cargo.lock
  name = "arrayvec"
  version = "0.7.8"
  source = "registry+https://github.com/rust-lang/crates.io-index"
-@@ -575,6 +587,15 @@
+@@ -575,6 +588,15 @@
  ]
  
  [[package]]
@@ -84,7 +100,7 @@ diff --git a/Cargo.lock b/Cargo.lock
  name = "blake3"
  version = "1.8.7"
  source = "registry+https://github.com/rust-lang/crates.io-index"
-@@ -802,6 +823,7 @@
+@@ -802,6 +824,7 @@
   "cipher",
   "cpufeatures 0.3.0",
   "rand_core 0.10.1",
@@ -92,7 +108,7 @@ diff --git a/Cargo.lock b/Cargo.lock
  ]
  
  [[package]]
-@@ -814,6 +836,7 @@
+@@ -814,6 +837,7 @@
   "chacha20",
   "cipher",
   "poly1305",
@@ -100,7 +116,35 @@ diff --git a/Cargo.lock b/Cargo.lock
  ]
  
  [[package]]
-@@ -3832,7 +3855,10 @@
+@@ -866,6 +890,7 @@
+  "block-buffer 0.12.1",
+  "crypto-common 0.2.2",
+  "inout",
++ "zeroize",
+ ]
+ 
+ [[package]]
+@@ -1314,9 +1339,9 @@
+ 
+ [[package]]
+ name = "ctutils"
+-version = "0.4.2"
++version = "0.4.4"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "7d5515a3834141de9eafb9717ad39eea8247b5674e6066c404e8c4b365d2a29e"
++checksum = "12218662ccac37d9714f2191252553d67585b97df8c839cbe49e0bde278dc865"
+ dependencies = [
+  "cmov",
+ ]
+@@ -2674,6 +2699,7 @@
+ checksum = "818356c5132c1fede50f837ca96afbe78ff42413047f4abb886217845e1b6c8c"
+ dependencies = [
+  "typenum",
++ "zeroize",
+ ]
+ 
+ [[package]]
+@@ -3832,7 +3858,10 @@
  version = "0.1.0"
  dependencies = [
   "anyhow",
@@ -111,6 +155,42 @@ diff --git a/Cargo.lock b/Cargo.lock
   "futures-util",
   "hmac",
   "http",
+@@ -5771,9 +5800,9 @@
+ 
+ [[package]]
+ name = "rustix"
+-version = "1.1.4"
++version = "1.1.6"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
++checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
+ dependencies = [
+  "bitflags 2.13.2",
+  "errno",
+@@ -6975,9 +7004,9 @@
+ 
+ [[package]]
+ name = "tokio"
+-version = "1.53.1"
++version = "1.53.3"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
++checksum = "ce3335fa71841cda333a58d7615b03901380ecf09d59b3296d21f8bbac0dde4e"
+ dependencies = [
+  "bytes",
+  "libc",
+@@ -7658,9 +7687,9 @@
+ 
+ [[package]]
+ name = "vodozemac"
+-version = "0.11.0"
++version = "0.11.2"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "ba935af014ca0ae5fb468daa51da81a8a0df7daad23c052c878b7c690cdf2574"
++checksum = "cafdb6875115a436251b280d741286a9cec7fc4daab0588ea26481dd8e2bab2f"
+ dependencies = [
+  "aes",
+  "arrayvec",
 diff --git a/bindings/matrix-sdk-crypto-ffi/Cargo.toml b/bindings/matrix-sdk-crypto-ffi/Cargo.toml
 --- a/bindings/matrix-sdk-crypto-ffi/Cargo.toml
 +++ b/bindings/matrix-sdk-crypto-ffi/Cargo.toml
