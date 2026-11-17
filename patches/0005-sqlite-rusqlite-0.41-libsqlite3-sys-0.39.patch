@@ -1,0 +1,60 @@
+sqlite: rusqlite 0.41.1 and libsqlite3-sys 0.39.1 (SQLite 3.54.1)
+
+RUSTSEC-2026-0459 (CVE-2026-119375): SQLite before 3.54.0 can return
+uninitialised page-cache memory for a database opened with a sibling -wal
+file of another page size. libsqlite3-sys 0.39 bundles SQLite 3.54.1 and
+needs rusqlite 0.41.
+
+Same change as upstream commit 18757f7e08ec ("chore: Bump the SQLite dep",
+2026-11-06): the requirement of matrix-sdk-sqlite and two entries of
+Cargo.lock (versions and checksums of the crates.io index; dependencies
+unchanged). No source change: the rusqlite API that matrix-sdk-sqlite 0.19.1
+uses (Connection, Statement, Row, Transaction, Params, params_from_iter,
+named_params, OptionalExtension, ToSql, limits::Limit, Error::SqliteFailure,
+ErrorCode, ffi::Error::new) has the same signatures in 0.40.2 and 0.41.1
+(read from the published sources). The features limits, fallible_uint, cache
+and bundled still exist. No change of the store format.
+
+Applies after 0001 to 0004, against tag matrix-sdk-crypto-0.19.1 (commit
+b18166c68bb958a21f0bca8b2d8320cb53583362). Not compiled locally (no Rust
+toolchain on the workstation): the build workflow is the first compilation.
+
+diff --git a/Cargo.lock b/Cargo.lock
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -3391,9 +3391,9 @@
+ 
+ [[package]]
+ name = "libsqlite3-sys"
+-version = "0.38.2"
++version = "0.39.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "f1d20bef17f513b9b3004532233187769cd072d790971f4e4da0e346eb6401e8"
++checksum = "14a5f01b87b92705d07b433c06f96cbc764637d81a0bffb5734ce17cf0f9a2b3"
+ dependencies = [
+  "cc",
+  "pkg-config",
+@@ -5746,9 +5746,9 @@
+ 
+ [[package]]
+ name = "rusqlite"
+-version = "0.40.2"
++version = "0.41.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "23f2a97da3e3873c73cb2a2e71b35c40ff95e0b1eefa8d72d8499a6928c3b5b3"
++checksum = "da9bba6f3506135e120a6586df05be18b48d18896600646a4bec8f993d91a594"
+ dependencies = [
+  "bitflags 2.13.2",
+  "fallible-iterator",
+diff --git a/crates/matrix-sdk-sqlite/Cargo.toml b/crates/matrix-sdk-sqlite/Cargo.toml
+--- a/crates/matrix-sdk-sqlite/Cargo.toml
++++ b/crates/matrix-sdk-sqlite/Cargo.toml
+@@ -41,7 +41,7 @@
+ num_cpus = { version = "1.17.0", default-features = false }
+ rmp-serde.workspace = true
+ ruma.workspace = true
+-rusqlite = { version = "0.40.2", default-features = false, features = ["limits", "fallible_uint", "cache"] }
++rusqlite = { version = "0.41.1", default-features = false, features = ["limits", "fallible_uint", "cache"] }
+ serde.workspace = true
+ serde_json.workspace = true
+ serde_path_to_error = { version = "0.1.20", default-features = false }
