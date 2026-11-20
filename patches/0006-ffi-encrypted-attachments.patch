@@ -1,0 +1,490 @@
+crypto-ffi: encrypted attachments of Otaku (otaku.5)
+
+Additions only, against tag matrix-sdk-crypto-0.19.1 (commit
+b18166c68bb958a21f0bca8b2d8320cb53583362), after 0001 to 0005. No behaviour
+of an existing call changes. Otaku D-381, ADR-0029 §10 (photos and voice
+messages encrypted on the device, MSG-41 to MSG-43).
+
+src/attachments.rs: two free functions, without an Olm machine nor a store,
+the counterparts of Attachment.encrypt / Attachment.decrypt of
+matrix-sdk-crypto-wasm, over the same types of matrix-sdk-crypto:
+- attachment_encrypt(data) -> EncryptedAttachment { encrypted_data,
+  media_encryption_info }: AttachmentEncryptor (fresh random key and IV of
+  the library, AES-256-CTR, SHA-256 of the ciphertext), then the JSON of
+  MediaEncryptionInfo (serde of the library: v, key, iv, hashes).
+- attachment_decrypt(encrypted_data, media_encryption_info) -> clear:
+  MediaEncryptionInfo read by serde, AttachmentDecryptor (EncryptedFile v2
+  only, SHA-256 of the data checked at its end), no output otherwise.
+Sizes: 1 byte to 25 MiB (CHAT_MEDIA_CEILING_BYTES of Otaku); info at most
+4 096 bytes. Outputs reserved with try_reserve_exact (insufficient_memory
+instead of an abort). Fixed error codes (AttachmentError): attachment_input,
+attachment_info, attachment_corrupted, insufficient_memory, internal. The
+clear input, the info text and a clear refused by the hash are erased on
+return (Zeroizing).
+
+No new dependency, Cargo.toml and Cargo.lock unchanged: matrix-sdk-crypto
+(AttachmentEncryptor, AttachmentDecryptor, MediaEncryptionInfo, already
+compiled into the library), serde_json, thiserror, zeroize, and, for the
+tests only, sha2 and vodozemac (base64), all already dependencies of
+matrix-sdk-crypto-ffi.
+
+Tests (cargo test -p matrix-sdk-crypto-ffi --lib attachments): the common
+vectors of Otaku (fixtures/otaku/attachment-v2.json, computed by node:crypto,
+same bytes as the Otaku repository, checked by SHA-256; among them the
+example of matrix-sdk-crypto's own tests and a counter that carries past
+2^64), an altered, truncated or longer ciphertext, the round trip and the
+shape of the info, the bounds, infos refused (v1, other versions,
+no hash, key or IV of the wrong size, not JSON, too long), and the
+exported surface.
+
+Not compiled locally (no Rust toolchain on the workstation): the checks
+job of the workflow is the first compilation.
+
+diff --git a/bindings/matrix-sdk-crypto-ffi/fixtures/otaku/attachment-v2.json b/bindings/matrix-sdk-crypto-ffi/fixtures/otaku/attachment-v2.json
+new file mode 100644
+--- /dev/null
++++ b/bindings/matrix-sdk-crypto-ffi/fixtures/otaku/attachment-v2.json
+@@ -0,0 +1,91 @@
++{
++  "description": "Common vectors of the encrypted media of Otaku (D-381, ADR-0029 §10): Matrix EncryptedFile v2 (AES-256-CTR with a 128-bit big-endian counter from the 16-byte IV, SHA-256 of the ciphertext, JWK key in unpadded base64url, IV and hashes in unpadded standard base64). Computed by node:crypto (scripts/attachment-fixture.mjs), independently of matrix-sdk-crypto. Fictitious values only. Hex is lowercase. mediaEncryptionInfo is the JSON given to the library (Attachment.decrypt on the web, attachment_decrypt of the Android binding).",
++  "format": "otaku.attachment-vectors",
++  "version": 1,
++  "vectors": [
++    {
++      "name": "upstream-example",
++      "note": "The vector of matrix-sdk-crypto's own tests; its clear is « It's a secret to everybody ».",
++      "clearHex": "4974277320612073656372657420746f206576657279626f6479",
++      "clearSha256": "KUKpxquE9tngAjyWOTcLD3/qS03vCJHWLBdDEx4ZWS8",
++      "ciphertextHex": "b39a767fba7f6e21cb2121864364ad2eeb1bd7ac241a4b2f21a0",
++      "mediaEncryptionInfo": {
++        "v": "v2",
++        "key": {
++          "kty": "oct",
++          "key_ops": ["decrypt", "encrypt"],
++          "alg": "A256CTR",
++          "k": "Voq2nkPme_x8no5-Tjq_laDAdxE6iDbxnlQXxwFPgE4",
++          "ext": true
++        },
++        "iv": "i0DovxYdJEcAAAAAAAAAAA",
++        "hashes": {
++          "sha256": "ANdt819a8bZl4jKy3Z+jcqtiNICa2y0AW4BBJ/iQRAU"
++        }
++      }
++    },
++    {
++      "name": "ascending-key",
++      "note": "Key 00..1f, IV of 8 bytes then a zero counter (the layout the library draws).",
++      "clearHex": "4f74616b753a20756e652070686f746f20646520746573742c207269656e20646520706c75732e",
++      "clearSha256": "oPU3F40CdfPyQOA8s9YqoDunMRinJzzy9vVB+r+Eycs",
++      "ciphertextHex": "91081a2ee8ce660ae0bd06deafd6792f09af1b9a32848ba5ae9203eaddc7e2789b799ec424415c",
++      "mediaEncryptionInfo": {
++        "v": "v2",
++        "key": {
++          "kty": "oct",
++          "key_ops": ["decrypt", "encrypt"],
++          "alg": "A256CTR",
++          "k": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
++          "ext": true
++        },
++        "iv": "oKGio6SlpqcAAAAAAAAAAA",
++        "hashes": {
++          "sha256": "MTj5J0niqhRU9Jrc60eNlBuPyI7fWCnvHKRC/m1DXcY"
++        }
++      }
++    },
++    {
++      "name": "counter-carry",
++      "note": "The low 64 bits of the counter start at 2^64 - 2: the 128-bit big-endian counter carries into the nonce half after two blocks (AES-CTR of Matrix is Ctr128BE).",
++      "clearHex": "032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e100",
++      "clearSha256": "+bWMVdBRMmx6EVCW8Alt5Mp1ZIhDzrRPHwaxnSeSkEM",
++      "ciphertextHex": "da0f19cf4de71f9a32dbd6b80e0d0fa60a362dc4268b0f266a18cd2726596c06bd6bd608190c76ff5fd8742bba30073e3a6a092fd9213709a025990264c90b1693a31dc563fa9e51145e63ee8548263a66fcdcccc4653c495f00852637d69b2d409f2d1c",
++      "mediaEncryptionInfo": {
++        "v": "v2",
++        "key": {
++          "kty": "oct",
++          "key_ops": ["decrypt", "encrypt"],
++          "alg": "A256CTR",
++          "k": "__jx6uPc1c7HwLmyq6Sdlo-IgXpzbGVeV1BJQjs0LSY",
++          "ext": true
++        },
++        "iv": "AQIDBAUGBwj//////////g",
++        "hashes": {
++          "sha256": "TeXiYoZ1YEYElkJVw5V205B8ciRl+qzMudY9aLSxav8"
++        }
++      }
++    },
++    {
++      "name": "several-blocks",
++      "note": "4 099 bytes: many blocks and a last partial one.",
++      "clearHex": "0726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e8072645",
++      "clearSha256": "yPlTOhdOAGbRyCi5Rv0SLQ47E9YbAR3POimWTjFirMY",
++      "ciphertextHex": "05eb4e836afd9d8a388c43cb4370d0cbbd174169521fa7b1186f7bad0312e86e8f939143ca9a4ab87e0f3ea1c3c80dcfc87c7f28cf7c59efd599778595764491956f62c7e9023e366b0b09d9c6b417aa1019f1245d9560bc348cc4c47d9c2c0e005d963fd82e6b87f4809777fe0b80f470bc4f37ed49ed751105c6850ebdd70cc1330281d2132d6362ebfe915bdfbb5a7ab9621f077746c6d90916692cca9f24d3c46c367934a578eafc6f89d3224a548d73fb25fdf4f6b026e4c4f45abc10948e4a5c9377b5620999f462233ec30b3bf712359d05ab9db9d0aaa182cf3b170f6d8f66bf8fb9b36d20781c97149710269c545506bb80096f55ed4023d53e048f41cb5e0e774a6f0436b093730a4c4416bb2d8d2d19f08967a01308e5ac3dc8ed45c0c3a3ea5d1100d6db06ed02ed05daf0509f1312fb0439f377e623e8f0287a203f77f3e7b0865ae8c93f5b0286e6e168811ef27837e695d5fe1bf9f32f21a47074ad543288de0997b52a023a5de3b81d41da080c9f1c9916ceafa0573e03483563735efe74e4d9c09f10d0794f3d20585d8625ebe56edf91112f432087e8ee5864dc697a5e17ffc27c8835ee0a258c6956d32841aeadf29bd814523956ece52b79ad2e90975a6da2f5f7b8e8ecca79d1fc07a9b0e35a465a4e1653c15fa479ce9f8b2fd9860363c0a60512aee727b4e76b3c2d7bbd76ff11eb0ce99e09d7dee2dd9e9228b9a97d681ba0847828ac0bde6a5ac6b35b910dc5e93d114ccfd05a452a682f5fc60af3d215797ca0c0a2a8a984e08430a42175ed5667cb43826d4daed0946c5be10535d5193dccf56ce73c5cfabe751b5483c691d456491f5ef576cd471bdafc0c05ef9087d3adcbb21feb18c55387b091b348516b8354119da4ba9625e423f43f182717c60191a8772f03b89f6daa220e391b2f8f5c9c226294b4a3ef247182100de3061e2de699193302ad2a2013ae70a4e23468bb2ed87f101627a0c1cfff745c8fad9dedfce3fee42374e57951479ba71debc700ed8e8073a124898375f650dfb5783092f41d0d9eb7a966cef73d14a50749f4cb5b188d6a01e94aadc70bf26adae0c4af18ed5aa093ca539e975dd14399f90e8769826291a6982c69620326444d733b0ac1e46f11accc0e4d9fcbc0ee4ef6a7eab0391650627a48009c4ecf81ccd686c62435abc23542517927b84efbe347ccef267fd43b0a13993f8e131f3e8434f5a528d015a19424c2fc8f964df587504d11a1eb34a785547d6e1c5967ef5a3f5d9151022c1abdf3b91fad5b5e97a76c3b19bbe58603eb6785bd7511d449bee7fb12a24eb1e5e006cca3e4b6c6e1fbcd5c9dd5689e60f6780dbb018c78ca921cf3083121945ca57d98101aa778c9ce60bb2f93c4ea1a82cc66e6b718924d94ff07fbeb64279e86067b8ba1e7501732a77a8e9c318df659755bb008615d9643519806de7f0b4c3c269795119b5de0309d48dfd3649de0f718b14cabe2d33b23cfa61eaf51c899ce23aa758344452c59905c5c83fee72f003dc29c215747328799edcb7e2d49c005afc3db639c7817c9b5bf4ac7ccc172cf58b84b1f95bf04e55b69c7b7cee2f4cbb6cfa5acd7341336241a33e83b01049fe0577fef6bef6ebf55aa1daa5e89da999fb2ee19b65065d24ee49ef5eb935b2242b97fa06cc0a021646d7d75a6d6cea5f76678483b9bf2f72ad23005d8121e5520dfc9185cc8eff43506f3cead27b11d5f4f78ba2c222bbd31520638c3d157d1f1e94e951e3d6a3bdf7836a86206df6f0340e70ab92f8676a29b5f47eda7257816a35908551de56554c65be458140b4e3defa05feaf630995534fc98f76cc8851b7f07fbb6417e7612f991550fa88c766bdfcd2c3d824390ab858001cea48ae7d67833f183fcf3e692390843fb72e144d2ce7e7286ecd5a740f9003c40e70e3e8e9c98bdca852cadffb8a2df83356c59cccbcaf955c7a5e821ff6be51902fb7ad69397e01123855b1f18ebbc06bd8bf5087857769fdeae4df6f6496da1b14f262461bc5d28c71b7636c76fb44e41d7c9c7f1a4099f6277482d82384f911d92ee550d4897e6fa3da4df09fb16f502db10ec6adf6618b3327b64d4c9f768f8a43dc5484bfdf59966256749e6f9de15ca7111a5b7909379164be891afb24027baa3cbbc0e0abb70775f1b88f76de538f13608ec6544b80b21cb5dca9e8f51c74eb72c8b2a56e7dfe58b79230f43c87c10ef7e3f01716112fa97626b27b4302e4e2a73399143de1f408bc4c61dd7cc841810d122257287bc262ab8c0274b553ed99b48bbfa4c687bb0ffd7e3d4ed59d829ecb6aa9f80978be8f81a68bcbaafcf6c7e06e3a6134204c50a525cf5d8e967e6c8cca775b53497838c70c01fc31944e6cd255076b275c37129ca12d4851cb3f15ebcade50a90c82c6be7e0a7361097b2a61802d99dab6c28164525c56d02a1dab7d3754c37f35284f003c0865e581fbb98035095d5ee9c606b70cf756275089564d2ede75c2b811cb20cf947fc986fbc4cf17e0f310aded1191fbb08b3c605ec0d9f8c0359f2036bc6f56a10358aed06021dcf884e64328108037ab9527e8f6583457aa152df2e54fab0dedd120139056d2182e50e2312c77aa5d3081334c5b9423c73b266d8f80e94d49d9b2c2439ea40d9fed8ded3d66111a1a39ddb78dad2cba89f3d93b5313b69b5c0381614fa49f6734663b64b6e4367c4b4d2b32a15344572a105f078d6c0315127ad93332adc7471e67a7547be460a7c6d8502c7b9fa2307ce8ff53f3a2cafdc4630b0393b2cdf848d8cba2c48e9aae4d50f56659cb2e235b22ea39287ef532f623bc5888fc736f9b6e1c482556b6badca35b7bde9d869906e15e5e855ac53797ba3a650c53537c70bf8d9ae1d9af372939dcd8a217851fd0672199022f935d69b4876e7b3095bc38826d12ffa01f9d3f3a78951359462e42860fc2788fb85f974318321a810ea0d1e1b1c9159909aa9ae297cf0f5923ed9a4a83d72757b547b3886970378aab091b29b7c56d8152b48d2b5d5f8b83df7e5e717701e2a7c081283651372f6b074cf837f56ced2aba21f17718b833948e05b5c3e1d12bc06037e0639a4bf443afb3b5db5890d99e4736198b5741eb2c6ef6e662198c5dfedeec312972105d6190ad56456d148545f3d9efe16860428f02fa833bd72e214500203c7adf0bf8b1f1b6448e0ec975d3352474ece72617c260e44531eb82221020599fd874233d086b83550f41b53b1cd2c4e5f22a84f28a837369123e5325655e4ba7b12219ca1406b17d80461bb74c62eb33350a5ab77eb5c3cdbf9a538022012dd200cf54192d23916a5e7b02b0be25f0ce6b296e4852d14e3581f07222d4463b0635a5a0035a061b7c417826099c09fbbe7bd1a23b5459421815a54c148cd4340b07d0eef11225384ce44d2faf2bc51bad9d4567b9ede08083eddc26a2ee6bf97f9174404dfe9677911676441b26701a04db4b5637ccfa8329b4375c9305bd30e42c20f1cc74ccfa1b02035cafbdea7e1b05e4c87cd9462bbae4e68b3c9908a05edb31a940965e1c820d8232b72af107d5dcd97072d83a7121b927d7e3c41f996d1206aa542cda7afca0ee4e4b5844dda3d3083adfb7c0e296c671161421976643ec019c8cc0916036a95d9a5c1a0f5e2cc49953bd2521671c13f24bc7e58b2f59c8966b3f3c3d66fc28d220af932fcc05acf69feeb5bbd7608821f794eceb83d23d7c7077653a5fd95086485e2c3646c3dea73449936e1d8d49c381110f6f9a5c29c72011f60774776de5c8651ac55833f242ba466bae03b628f961803e3ba8e0a5b8ccefb4c48e0fadfe706d0681305e84ceb351252400cedcddee9ad27eb732ac63c98cf9833bdba51437a3872c1bd5156fc667f598bbd2d65799bfd512db4dbb93f127945fa62634f39f66d627d5d9af304066b692c605147ea914b668b96d00b82e4dcc725a6d3f9808910039732ab35a0dce76a824ecd8eb770c74088cf05c03a08ff73825ac39a8398c6140942a1f41500ae09a3021c82ab79b802163d0b701e5d587deb11fbe39a4fb27af75c4617dd82afca6097470be95bff70f214fcede7db97df194908ad855332d043a9131210f526df10f13ad42373a1ec4d2dc0dbb0e5cb76127cf2ea9bf2a1cc7d913ba0a1bfaf2e9d30caa3abe4cdb738501157752c2db3263feb0f731d844a7ee611654292ffbc7bebfcf8860320950cd781c7fd74bc4e6482932039fb0b9d65bf581b6d6646a65a6419d08185d0b434a14dd2ca8c60d13a0cf4e0e8310a25a45fb3ecf3c63aec272db44f31a037530ccc06012c62b4b6ba0e98d4aed32901bfdee5e39dab60c06298c4626edbe42bddf2aeb2177321d1d99850b9efd059f5cc7fa51728e269f5e64be6e81bb5dccbe514e8a4fa28bc5f0088212eb7466b2bcb5969db5eb7e256ddd3699ff22caa284844235ef71c893e31bf85c943723c5df83c36491486facd8fcd18e959e067701733a898f3f65a70d4e85a3ccd21676e00895a6e4e04077eb17e525a24a8ca6677e014cd5ec5fad3acaca0fc08270d59a0c8df10041a5e3e5cf77116798d0e5aefe5b9fa02f7e5f789ba3d7f16684e1a535629012feb09dbac6b045ab0ee839257d4089e89d124bc34382ced070406120548249f02ac5a804b6431842b9cc49de0a1f74b05f8c5bd2f4c8249bd84bf50e8ac0a24247f241f262a762dd97926aaa42d1faf2ff468e78096419aa1c3915a8b8db67167c49bc14ef86b43e65795db3a788baa460b624fa0854d1c0141ce6321091cfa19b14197a103a14604f526fc1b9789f07fc136e30c36d94c9718db67c096aa362ff1e36a3daf0cfa77a1ff7226e8fd2decdbb3a833c756488eea631258d889f461945d9adb9c2765901c661f064cfa4176dfa19b9837b7189804d5af82f2cf0c0d9fccc6228c7a281598841672acf58486470a10020bbbf4574fbeaab032ca216af6447dbb3926a73fb1f8e6b5e35a2fb0dded3257ba65d75c90c74c4eccbc01092a81cf2a5519b67095f09a11464d36565d309bdca281e47d3f917972f89214b415964908ee6d8005fa52acd48f549969c7cd39945da463a88cdc6cf70811aa40899652e7e9a342b4f8b6cfd1a699049bf5079645b77d25bcedf598150645cec8a146c7d3b1298ed0850f7cc18ffeb442275d9dab1c639a27e2f91f159a9b888f726f6270258714934a3cb8eb143e4b95a2c207d2a39ba69d36f33b47c58b3e05b9ecc140352fdeb0238e35e641230c3b630e929cc27a074769e823673c888aaa65b1c2913d38c9541aa319b9ea22b4eaadca250168f4157d87be92483ccd1dd6c2c33f18fcf04b47f10651c374e86ec01190ac8fdc60ba0794222a30bb4f46895a82f00d7c375dee28c4ab9b8ab1f6556ddcaea2b0216ce219bc99316771e6c463aedd9759429207c91b5feb2a028b084b54d11267db78a3d4799400d8d6d68d7b8b87cecaabae45253774ea61386af6ca09813b0b7e70d12e10e8f8d04c543bb54aa1cfde60bce7d31f9ad52e8e42191f96c8ef906b0b33877c92480666b94c6aa12b9d6d1741102a4a696382898d2a1c35d59afd6f0c8b7e6c0a5ae3bf294164b95db362b64a9251a6094c1b3dd10e9fe0f88ecd727d7c89a97a39ec5b686afc27b3f9497a4875b70f894a7729f9b57b337422e04672d0806fb6ed004d6288fc62e6c377e94980087446988a1191a1682c622ac15eac6fb90ae95cb84d537c7acccd9f9f26da382a430f0526add761bc182f86fe38a8",
++      "mediaEncryptionInfo": {
++        "v": "v2",
++        "key": {
++          "kty": "oct",
++          "key_ops": ["decrypt", "encrypt"],
++          "alg": "A256CTR",
++          "k": "QENGSUxPUlVYW15hZGdqbXBzdnl8f4KFiIuOkZSXmp0",
++          "ext": true
++        },
++        "iv": "CQgHBgUEAwIAAAAAAAAAAA",
++        "hashes": {
++          "sha256": "ppgTdE0kBFs7IeavMRewpoiUfYtOlVidWG5gK1SkAOs"
++        }
++      }
++    }
++  ]
++}
+diff --git a/bindings/matrix-sdk-crypto-ffi/src/attachments.rs b/bindings/matrix-sdk-crypto-ffi/src/attachments.rs
+new file mode 100644
+--- /dev/null
++++ b/bindings/matrix-sdk-crypto-ffi/src/attachments.rs
+@@ -0,0 +1,328 @@
++//! Encrypted attachments of the messaging of Otaku, for Android (Otaku D-381, ADR-0029 §10;
++//! release otaku.5).
++//!
++//! The web encrypts a photo or a voice message with `Attachment.encrypt` and opens it with
++//! `Attachment.decrypt` of matrix-sdk-crypto-wasm. The UniFFI bindings have no such call, so the
++//! same two are exported here, over the same types of matrix-sdk-crypto: `AttachmentEncryptor`
++//! (fresh random key and IV, AES-256-CTR, SHA-256 of the ciphertext) and `AttachmentDecryptor`
++//! (`EncryptedFile` v2 only, SHA-256 checked at the end of the data). Nothing is implemented in
++//! this file: it only feeds bytes to those types and checks the sizes.
++//!
++//! - Free functions, without an Olm machine nor a store.
++//! - The media encryption info crosses as the JSON of `MediaEncryptionInfo` (serde of the library,
++//!   the shape the wasm bindings give and take).
++//! - Fixed error codes, no message of a library, nothing logged.
++//! - The clear input of `attachment_encrypt`, the info text of `attachment_decrypt` and a clear
++//!   refused by the hash check are erased when the function returns (`Zeroizing`).
++//! - Known limit (as on the web): the values cross the UniFFI boundary in `RustBuffer` copies that
++//!   are not erased, and the key held by `AttachmentEncryptor` / `AttachmentDecryptor` is not
++//!   erased by the library when they are dropped.
++
++use std::io::{Cursor, Read};
++
++use matrix_sdk_crypto::{AttachmentDecryptor, AttachmentEncryptor, MediaEncryptionInfo};
++use zeroize::Zeroizing;
++
++/// Largest attachment, clear or encrypted (CHAT_MEDIA_CEILING_BYTES of Otaku: 25 MiB, every kind
++/// of media included, later ones too).
++const MAX_ATTACHMENT_BYTES: usize = 25 * 1024 * 1024;
++/// Largest media encryption info accepted (the real one is about 250 bytes).
++const MAX_INFO_BYTES: usize = 4096;
++
++/// The fixed error codes of the attachments (closed list).
++#[derive(Debug, PartialEq, Eq, thiserror::Error, uniffi::Error)]
++#[uniffi(flat_error)]
++pub enum AttachmentError {
++    /// Empty data, or data above the bound.
++    #[error("attachment_input")]
++    Input,
++    /// The media encryption info does not read (JSON, version other than v2, no SHA-256, a key
++    /// or an IV of the wrong size).
++    #[error("attachment_info")]
++    Info,
++    /// The SHA-256 of the encrypted data is not the one of the info: no output.
++    #[error("attachment_corrupted")]
++    Corrupted,
++    /// The output could not be reserved.
++    #[error("insufficient_memory")]
++    InsufficientMemory,
++    /// Anything else.
++    #[error("internal")]
++    Internal,
++}
++
++/// An attachment encrypted by `attachment_encrypt`.
++#[derive(uniffi::Record)]
++pub struct EncryptedAttachment {
++    /// The encrypted bytes, as many as the clear ones.
++    pub encrypted_data: Vec<u8>,
++    /// The JSON of `MediaEncryptionInfo` (`v`, `key`, `iv`, `hashes`): it holds the key.
++    pub media_encryption_info: String,
++}
++
++fn check_size(len: usize) -> Result<(), AttachmentError> {
++    if len == 0 || len > MAX_ATTACHMENT_BYTES { Err(AttachmentError::Input) } else { Ok(()) }
++}
++
++fn reserved<T>(len: usize) -> Result<Vec<T>, AttachmentError> {
++    let mut buffer = Vec::new();
++    buffer.try_reserve_exact(len).map_err(|_| AttachmentError::InsufficientMemory)?;
++    Ok(buffer)
++}
++
++/// Encrypts `data` with a fresh key and IV (`Attachment.encrypt` of the wasm bindings).
++#[matrix_sdk_ffi_macros::export]
++pub fn attachment_encrypt(data: Vec<u8>) -> Result<EncryptedAttachment, AttachmentError> {
++    let data = Zeroizing::new(data);
++    check_size(data.len())?;
++    let mut reader = Cursor::new(data.as_slice());
++    let mut encryptor = AttachmentEncryptor::new(&mut reader);
++    // Within the reserved capacity: the clear read into it is encrypted in place, never copied.
++    let mut encrypted = Zeroizing::new(reserved::<u8>(data.len())?);
++    encryptor.read_to_end(&mut encrypted).map_err(|_| AttachmentError::Internal)?;
++    if encrypted.len() != data.len() {
++        return Err(AttachmentError::Internal);
++    }
++    let info = encryptor.finish();
++    let info = Zeroizing::new(serde_json::to_string(&info).map_err(|_| AttachmentError::Internal)?);
++    Ok(EncryptedAttachment {
++        encrypted_data: std::mem::take(&mut *encrypted),
++        media_encryption_info: info.as_str().to_owned(),
++    })
++}
++
++/// Decrypts what `attachment_encrypt` (or any Matrix client) produced, given its media encryption
++/// info (`Attachment.decrypt` of the wasm bindings): no output unless the SHA-256 of the encrypted
++/// data is the one of the info.
++#[matrix_sdk_ffi_macros::export]
++pub fn attachment_decrypt(
++    encrypted_data: Vec<u8>,
++    media_encryption_info: String,
++) -> Result<Vec<u8>, AttachmentError> {
++    let info_text = Zeroizing::new(media_encryption_info);
++    check_size(encrypted_data.len())?;
++    if info_text.len() > MAX_INFO_BYTES {
++        return Err(AttachmentError::Info);
++    }
++    let info: MediaEncryptionInfo =
++        serde_json::from_str(&info_text).map_err(|_| AttachmentError::Info)?;
++    let mut reader = Cursor::new(encrypted_data.as_slice());
++    let mut decryptor =
++        AttachmentDecryptor::new(&mut reader, info).map_err(|_| AttachmentError::Info)?;
++    let mut clear = Zeroizing::new(reserved::<u8>(encrypted_data.len())?);
++    // The hash is checked when the reader reaches the end: an error then, and the clear already
++    // written is erased with `clear`.
++    decryptor.read_to_end(&mut clear).map_err(|_| AttachmentError::Corrupted)?;
++    if clear.len() != encrypted_data.len() {
++        return Err(AttachmentError::Internal);
++    }
++    Ok(std::mem::take(&mut *clear))
++}
++
++#[cfg(test)]
++mod tests {
++    //! Blocking for every release of the binding: the common vectors of Otaku (computed by
++    //! node:crypto, read by the web and by the Android adapter too: the same bytes, checked by
++    //! SHA-256), the round trip, every refusal, and the exported surface.
++
++    use serde_json::Value;
++    use sha2::{Digest, Sha256};
++    use vodozemac::{base64_decode, base64_encode};
++
++    use super::*;
++
++    const VECTORS: &[u8] = include_bytes!("../fixtures/otaku/attachment-v2.json");
++    // SHA-256 of packages/crypto/fixtures/attachment-v2.json of the Otaku repository (same bytes).
++    const VECTORS_SHA256: &str =
++        "c9855d9cb93ab53aa3bd9e55b573884e8c57d19b5e526c0bc80df8ea99c8dd20";
++
++    fn hex(text: &str) -> Vec<u8> {
++        assert!(text.len() % 2 == 0, "odd hex length");
++        (0..text.len())
++            .step_by(2)
++            .map(|i| u8::from_str_radix(&text[i..i + 2], 16).expect("hex"))
++            .collect()
++    }
++
++    fn to_hex(bytes: &[u8]) -> String {
++        bytes.iter().map(|b| format!("{b:02x}")).collect()
++    }
++
++    fn vectors() -> Vec<Value> {
++        assert_eq!(to_hex(&Sha256::digest(VECTORS)), VECTORS_SHA256, "fixture differs from the web's");
++        let fixture: Value = serde_json::from_slice(VECTORS).expect("fixture JSON");
++        assert_eq!(fixture["format"], "otaku.attachment-vectors");
++        assert_eq!(fixture["version"], 1);
++        let vectors = fixture["vectors"].as_array().expect("vectors").clone();
++        assert_eq!(vectors.len(), 4, "every vector of the fixture is read");
++        vectors
++    }
++
++    fn text<'a>(value: &'a Value, key: &str) -> &'a str {
++        value[key].as_str().unwrap_or_else(|| panic!("missing {key}"))
++    }
++
++    fn info_of(vector: &Value) -> String {
++        serde_json::to_string(&vector["mediaEncryptionInfo"]).expect("info")
++    }
++
++    // ---- Common vectors of Otaku (node:crypto) ----
++
++    #[test]
++    fn decrypts_every_common_vector() {
++        for vector in vectors() {
++            let name = text(&vector, "name");
++            let clear = attachment_decrypt(hex(text(&vector, "ciphertextHex")), info_of(&vector))
++                .unwrap_or_else(|e| panic!("{name}: {e}"));
++            assert_eq!(to_hex(&clear), text(&vector, "clearHex"), "{name}");
++            assert_eq!(base64_encode(Sha256::digest(&clear)), text(&vector, "clearSha256"), "{name}");
++        }
++    }
++
++    #[test]
++    fn upstream_example_is_the_secret() {
++        let vector = vectors().into_iter().find(|v| v["name"] == "upstream-example").expect("example");
++        let clear = attachment_decrypt(hex(text(&vector, "ciphertextHex")), info_of(&vector)).expect("decrypt");
++        assert_eq!(clear, b"It's a secret to everybody");
++    }
++
++    #[test]
++    fn an_altered_byte_of_any_vector_is_corrupted() {
++        for vector in vectors() {
++            let ciphertext = hex(text(&vector, "ciphertextHex"));
++            for index in [0, ciphertext.len() / 2, ciphertext.len() - 1] {
++                let mut altered = ciphertext.clone();
++                altered[index] ^= 1;
++                assert_eq!(
++                    attachment_decrypt(altered, info_of(&vector)),
++                    Err(AttachmentError::Corrupted),
++                    "{} byte {index}",
++                    text(&vector, "name"),
++                );
++            }
++            // Truncated or longer: the hash no longer matches.
++            let short = ciphertext[..ciphertext.len() - 1].to_vec();
++            assert_eq!(attachment_decrypt(short, info_of(&vector)), Err(AttachmentError::Corrupted));
++            let mut long = ciphertext.clone();
++            long.push(0);
++            assert_eq!(attachment_decrypt(long, info_of(&vector)), Err(AttachmentError::Corrupted));
++        }
++    }
++
++    // ---- Encryption ----
++
++    #[test]
++    fn encrypts_with_a_fresh_key_and_round_trips() {
++        let clear: Vec<u8> = (0..10_000u32).map(|i| (i * 31 + 7) as u8).collect();
++        let a = attachment_encrypt(clear.clone()).expect("encrypt");
++        let b = attachment_encrypt(clear.clone()).expect("encrypt");
++        assert_eq!(a.encrypted_data.len(), clear.len());
++        assert_ne!(a.encrypted_data, clear);
++        assert_ne!(a.encrypted_data, b.encrypted_data);
++        let info: Value = serde_json::from_str(&a.media_encryption_info).expect("info JSON");
++        let other: Value = serde_json::from_str(&b.media_encryption_info).expect("info JSON");
++        assert_ne!(info["key"]["k"], other["key"]["k"]);
++        assert_ne!(info["iv"], other["iv"]);
++        assert_eq!(info["v"], "v2");
++        assert_eq!(info["key"]["kty"], "oct");
++        assert_eq!(info["key"]["alg"], "A256CTR");
++        assert_eq!(info["key"]["ext"], true);
++        assert_eq!(info["key"]["key_ops"], serde_json::json!(["decrypt", "encrypt"]));
++        let iv = base64_decode(info["iv"].as_str().expect("iv")).expect("iv base64");
++        assert_eq!(iv.len(), 16);
++        assert_eq!(&iv[8..], &[0u8; 8], "the counter half starts at zero");
++        assert_eq!(text(&info["hashes"], "sha256"), base64_encode(Sha256::digest(&a.encrypted_data)));
++        let object = info.as_object().expect("object");
++        let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
++        keys.sort_unstable();
++        assert_eq!(keys, ["hashes", "iv", "key", "v"], "no url, nothing else");
++        assert_eq!(attachment_decrypt(a.encrypted_data, a.media_encryption_info).expect("decrypt"), clear);
++    }
++
++    #[test]
++    fn bounds_of_the_data() {
++        assert_eq!(attachment_encrypt(Vec::new()).err(), Some(AttachmentError::Input));
++        assert_eq!(attachment_encrypt(vec![0; MAX_ATTACHMENT_BYTES + 1]).err(), Some(AttachmentError::Input));
++        let largest = attachment_encrypt(vec![7; MAX_ATTACHMENT_BYTES]).expect("largest");
++        assert_eq!(largest.encrypted_data.len(), MAX_ATTACHMENT_BYTES);
++        let all = vectors();
++        let vector = &all[1];
++        assert_eq!(attachment_decrypt(Vec::new(), info_of(vector)), Err(AttachmentError::Input));
++        assert_eq!(
++            attachment_decrypt(vec![0; MAX_ATTACHMENT_BYTES + 1], info_of(vector)),
++            Err(AttachmentError::Input),
++        );
++    }
++
++    // ---- Media encryption info refused ----
++
++    #[test]
++    fn refuses_an_info_that_does_not_read() {
++        let all = vectors();
++        let vector = &all[1];
++        let ciphertext = hex(text(vector, "ciphertextHex"));
++        let base = vector["mediaEncryptionInfo"].clone();
++        let mut cases: Vec<String> = vec![
++            String::new(),
++            "not json".to_owned(),
++            "[]".to_owned(),
++            "x".repeat(MAX_INFO_BYTES + 1),
++        ];
++        let mut edit = |change: &dyn Fn(&mut Value)| {
++            let mut value = base.clone();
++            change(&mut value);
++            cases.push(serde_json::to_string(&value).expect("case"));
++        };
++        // v1 (IV never checked) and any other version: refused by the library (UnknownVersion).
++        edit(&|v| v["v"] = Value::from("v1"));
++        edit(&|v| v["v"] = Value::from("v3"));
++        edit(&|v| {
++            v.as_object_mut().expect("object").remove("hashes");
++        });
++        edit(&|v| v["hashes"] = serde_json::json!({}));
++        edit(&|v| v["key"]["k"] = Value::from("AAAA"));
++        edit(&|v| v["iv"] = Value::from("AAAA"));
++        edit(&|v| {
++            v.as_object_mut().expect("object").remove("key");
++        });
++        for case in cases {
++            assert_eq!(
++                attachment_decrypt(ciphertext.clone(), case.clone()),
++                Err(AttachmentError::Info),
++                "{case:.80}",
++            );
++        }
++        // Another key or IV of the right size: the hash still matches the ciphertext (it is the
++        // hash of the ciphertext), so the clear differs; the app checks the SHA-256 of the clear
++        // (plainSha256), as on the web.
++        let mut other = base.clone();
++        other["key"]["k"] = Value::from("Voq2nkPme_x8no5-Tjq_laDAdxE6iDbxnlQXxwFPgE4");
++        let clear = attachment_decrypt(ciphertext, serde_json::to_string(&other).expect("other")).expect("decrypt");
++        assert_ne!(to_hex(&clear), text(vector, "clearHex"));
++    }
++
++    // ---- Exported surface ----
++
++    /// Exactly two exported functions in this file, with these signatures.
++    #[test]
++    fn exported_surface_is_the_closed_list() {
++        let source = include_str!("attachments.rs");
++        let production = &source[..source.find("#[cfg(test)]").expect("tests")];
++        let exported: Vec<String> = production
++            .split("#[matrix_sdk_ffi_macros::export]")
++            .skip(1)
++            .map(|rest| {
++                let signature = &rest[..rest.find('{').expect("body")];
++                signature.split_whitespace().collect::<Vec<_>>().join(" ")
++            })
++            .collect();
++        assert_eq!(
++            exported,
++            vec![
++                "pub fn attachment_encrypt(data: Vec<u8>) -> Result<EncryptedAttachment, AttachmentError>",
++                "pub fn attachment_decrypt( encrypted_data: Vec<u8>, media_encryption_info: String, ) -> Result<Vec<u8>, AttachmentError>",
++            ]
++        );
++        assert!(!production.contains("uniffi::export"), "export through the crate's macro only");
++    }
++}
+diff --git a/bindings/matrix-sdk-crypto-ffi/src/lib.rs b/bindings/matrix-sdk-crypto-ffi/src/lib.rs
+--- a/bindings/matrix-sdk-crypto-ffi/src/lib.rs
++++ b/bindings/matrix-sdk-crypto-ffi/src/lib.rs
+@@ -6,6 +6,7 @@
+ #![warn(missing_docs)]
+ #![allow(unused_qualifications)]
+ 
++mod attachments;
+ mod backup_primitives;
+ mod backup_recovery_key;
+ mod dehydrated_devices;
+@@ -24,6 +25,7 @@ use std::{
+ };
+ 
+ use anyhow::Context as _;
++pub use attachments::{AttachmentError, EncryptedAttachment};
+ pub use backup_primitives::BackupPrimitiveError;
+ pub use backup_recovery_key::{
+     BackupRecoveryKey, DecodeError, MegolmV1BackupKey, PassphraseInfo, PkDecryptionError,
