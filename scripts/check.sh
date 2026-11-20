@@ -5,6 +5,7 @@
 #   1. Cargo.lock of the patched upstream resolves as is (--locked); otherwise the minimal change
 #      cargo would make is printed, for the patch, and the check fails.
 #   2. cargo test of the backup primitives (official vectors, Otaku fixtures, refusals, erasure).
+#   2 bis. cargo test of the encrypted attachments (patch 0006: common vectors of Otaku, refusals).
 #   3. Dependency trees for the phone (union of the targets): the three crates of the backup primitives resolve to one
 #      version each and digest to the versions already locked upstream (no new duplicate).
 #   4. cargo audit on the lock file: a vulnerability of a crate linked for the phone fails;
@@ -51,6 +52,10 @@ export CARGO_NET_OFFLINE=true
 # assertions and overflow checks of a test build.
 CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS=true \
   cargo test --locked --release -p matrix-sdk-crypto-ffi --lib backup_primitives -- --test-threads=1
+
+# 2 bis. Vectors of the encrypted attachments (patch 0006, Otaku D-381), same build settings.
+CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS=true \
+  cargo test --locked --release -p matrix-sdk-crypto-ffi --lib attachments -- --test-threads=1
 
 # 3. Dependency trees of the library for the phone, for every shipped target (TARGETS: arm64 and
 # armv7); the crates linked for the phone are the union of both (published by build.sh too).
